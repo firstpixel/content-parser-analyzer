@@ -295,30 +295,103 @@ pip install --upgrade pip
 ```
 
 ## Install Dependencies
+For macOS (Homebrew)
+Run the following commands:
 
-```bash
-# Install all required packages
+```sh
+# Install ICU4C
+brew install icu4c
+
+# Set environment variables so Python can find ICU
+export LDFLAGS="-L/usr/local/opt/icu4c/lib"
+export CPPFLAGS="-I/usr/local/opt/icu4c/include"
+export PKG_CONFIG_PATH="/usr/local/opt/icu4c/lib/pkgconfig"
+
+# Try installing again
 pip install -r requirements.txt
-
-# Download required NLTK data
-python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')"
-
-# Download required spaCy model
-python -m spacy download en_core_web_sm
 ```
+If you're using an M1/M2 Mac, ICU might be installed in /opt/homebrew instead of /usr/local. Try:
+
+
+```sh
+export LDFLAGS="-L/opt/homebrew/opt/icu4c/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/icu4c/include"
+export PKG_CONFIG_PATH="/opt/homebrew/opt/icu4c/lib/pkgconfig"
+```
+
+For Ubuntu/Debian
+```sh
+# Install ICU libraries
+sudo apt update && sudo apt install -y libicu-dev pkg-config
+
+# Try installing again
+pip install -r requirements.txt
+```
+
+For Windows (using Conda)
+If you are on Windows, it's best to install pyicu via Conda:
+
+```sh
+conda install -c conda-forge icu pyicu
+```
+Then, retry:
+
+```sh
+pip install -r requirements.txt
+```
+After performing the above steps, try running:
+
+```sh
+python -c "import icu; print(icu.ICU_VERSION)"
+```
+to verify ICU is correctly installed.
+
+Let me know if you still encounter issues! 🚀
 
 ## Verification
 
 ```python
 # Test the installation
-python -c "from utils.content_parser_analyzer import ContentParserAnalyzer; print('Setup successful!')"
+try:
+    from utils.content_parser_analyzer import ContentParserAnalyzer
+    print('Setup successful!')
+except ImportError as e:
+    print(f"Error: {e}")
+    print("Please ensure all dependencies are installed:")
+    print("pip install -r requirements.txt")
 ```
 
 ## Troubleshooting
 
-If you encounter issues with polyglot installation:
-- macOS: Make sure ICU is installed correctly: `brew install icu4c`
-- Windows: Verify Visual C++ Build Tools are installed and ICU is in your PATH
+### Common Issues
+
+1. **ModuleNotFoundError: No module named 'bs4'**
+   ```bash
+   pip install beautifulsoup4 bs4
+   ```
+
+2. **ModuleNotFoundError: No module named 'spacy'**
+   ```bash
+   pip install spacy
+   python -m spacy download en_core_web_sm
+   ```
+
+3. **Issues with polyglot installation**
+
+
+   - macOS: Make sure ICU is installed correctly:
+     ```bash
+     
+     brew install icu4c
+
+     export LDFLAGS="-L/opt/homebrew/opt/icu4c/lib"
+     export CPPFLAGS="-I/opt/homebrew/opt/icu4c/include"
+     export PKG_CONFIG_PATH="/opt/homebrew/opt/icu4c/lib/pkgconfig"
+     
+     pip install --no-cache-dir --force-reinstall pyicu polyglot
+     
+     ```
+   - Windows: Verify Visual C++ Build Tools are installed and ICU is in your PATH
 
 For other dependencies:
 - Make sure your virtual environment is activated

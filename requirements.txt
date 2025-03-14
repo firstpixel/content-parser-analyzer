@@ -1,14 +1,22 @@
-beautifulsoup4>=4.9.3
-nltk>=3.6.0
-textblob>=0.15.3
-scikit-learn>=0.24.0
-numpy>=1.19.0
-spacy>=3.0.0
-langdetect>=1.0.9
-text2emotion>=0.0.5
-python-Levenshtein>=0.12.2
-pygments>=2.10.0
-polyglot>=16.7.4
-pyicu>=2.8.1
-pycld2>=0.41
-morfessor>=2.0.6
+# Core dependencies
+beautifulsoup4
+bs4  # Needed for proper BS4 import
+lxml  # Required by beautifulsoup4 for better HTML parsing
+nltk
+textblob
+scikit-learn
+numpy
+spacy
+langdetect
+text2emotion
+pygments
+
+# Language detection dependencies
+
+pycld2
+morfessor
+tqdm
+python-Levenshtein
+pygments
+polyglot
+#pyicu
