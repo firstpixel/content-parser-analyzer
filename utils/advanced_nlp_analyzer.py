@@ -1,596 +1,1200 @@
 """
-Minimal yet functional Advanced NLP Analyzer implementing requested features.
-This is a lightweight implementation intended to satisfy determinism, config, schema and tests.
-Heavy NLP features are optional and guarded by try/except.
+Advanced NLP Analyzer with Temporal Orthogonal Functions
+
+This module implements comprehensive text-to-numerical-data analysis with:
+- Multi-scale temporal windowing (100, 200, 300, 600 tokens + full text)
+- RCGE-PAVU orthogonal parameter families
+- Named Entity Recognition (NER)
+- Relationship extraction
+- Word-sense disambiguation
+- Information extraction
+
+All outputs are numerical/JSON format for validation and comparison.
 """
-import hashlib
-import json
-import os
-import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from collections import Counter
 
-CAUSAL_WORDS = {"because", "since", "therefore", "thus", "hence", "if", "then", "as", "so"}
-MODAL_WORDS = {"can", "could", "might", "may", "should", "would", "will", "must", "shall"}
-POSITIVE_WORDS = {"good", "great", "positive", "beneficial", "effective", "success", "improve", "support", "confident"}
-NEGATIVE_WORDS = {"bad", "poor", "negative", "harmful", "fail", "issue", "risk", "doubt", "problem"}
-VAGUE_TERMS = {"maybe", "perhaps", "some", "many", "various", "multiple", "often", "sometimes", "generally"}
-HEDGE_TERMS = {"might", "could", "possibly", "seems", "appears", "suggests", "approximately", "around", "roughly"}
-EMPATHY_WORDS = {"understand", "feel", "together", "share", "support", "care", "appreciate", "encourage"}
-IMAGERY_WORDS = {"bright", "dark", "colorful", "vivid", "spark", "glow", "shadow", "fragrant", "melody", "texture"}
-PERSUASIVE_WORDS = {"must", "need", "should", "required", "critical", "essential", "vital", "important"}
-PURPOSE_WORDS = {"to", "ensure", "enable", "achieve", "in", "order", "so", "that"}
-AMBIGUOUS_WORDS = {"bank", "charge", "fair", "right", "left", "light", "sound", "match", "pitch", "scale"}
-HYPOTHETICAL_TERMS = {"if", "would", "could", "should", "suppose", "imagine", "assuming"}
-SOURCE_WORDS = {"according", "cited", "reported", "source", "study", "research", "data"}
-ENGAGEMENT_PRONOUNS = {"you", "your", "yours"}
-INCLUSIVE_PRONOUNS = {"we", "our", "ours", "together"}
-STOPWORDS = {"the", "a", "an", "and", "or", "but", "if", "to", "of", "in", "on", "for", "with"}
-CONTENT_WORD_THRESHOLD = 4
-
-try:
-    from .seed import centralize_seed
-except ImportError:
-    import random
-    import numpy as np
-
-    def centralize_seed(seed: int | None = None) -> int | None:
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
-        return seed
-
-import random
+import spacy
 import numpy as np
-
-try:
-    from sklearn.decomposition import PCA
-    from sklearn.preprocessing import StandardScaler
-except Exception:
-    PCA = None
-    StandardScaler = None
-
-# light tokenizer
+from textblob import TextBlob
+from nltk.tokenize import sent_tokenize, word_tokenize
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from collections import Counter, defaultdict
 import re
+from typing import Dict, List, Any, Tuple
+from utils.base_parser import BaseParser
 
-def simple_tokenize(text: str):
-    return [t for t in re.findall(r"\w+", text.lower())]
 
-@dataclass
-class AnalyzerConfig:
-    seed: int = 42
-    windows: List[int] = field(default_factory=lambda: [100, 200, 300, 600])
-    stride_fraction: float = 0.5
-    light_mode: bool = True
-    orthogonalize: bool = False
-    factual_adapter: bool = False
-    results_dir: str = "results"
-
-class AdvancedNLPAnalyzer:
-    def __init__(self, text: str, config: Optional[AnalyzerConfig] = None):
-        self.text = text or ""
-        self.config = config or AnalyzerConfig()
-        self.seed = centralize_seed(self.config.seed)
-        self.counts: Dict[str, Any] = {}
-        self.metadata: Dict[str, Any] = {}
-        self.tokens = simple_tokenize(self.text)
-        self.sentences = self._split_sentences(self.text)
-        self.domain_keywords = {tok for tok in self.tokens if len(tok) >= CONTENT_WORD_THRESHOLD}
-        self.window_sizes = sorted({w for w in self.config.windows if w > 0})
-        os.makedirs(self.config.results_dir, exist_ok=True)
-
-        # placeholder for model versions
-        self.model_versions = {
-            'python': f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
-        }
-
-    def _version_hash(self, commit_sha: str = "UNKNOWN"):
-        payload = json.dumps({
-            'models': self.model_versions,
-            'schema_version': '1.0',
-            'commit_sha': commit_sha
-        }, sort_keys=True).encode('utf-8')
-        return hashlib.sha256(payload).hexdigest()
-
-    def _window_slices(self):
-        n = len(self.tokens)
-        if n == 0:
-            return {}
-        window_sizes = sorted({min(max(1, w), n) for w in self.window_sizes} | {n})
-        slices: Dict[str, List[tuple]] = {}
-        for size in window_sizes:
-            stride = max(1, int(size * self.config.stride_fraction))
-            ranges = []
-            for start in range(0, max(1, n - size) + 1, stride):
-                end = min(n, start + size)
-                ranges.append((start, end))
-                if end == n:
-                    break
-            if not ranges:
-                ranges = [(0, n)]
-            key = f"window_{size if size < n else 'full'}"
-            slices[key] = ranges
-        return slices
-
-    def _compute_simple_metrics(self, token_list: List[str]) -> Dict[str, float]:
-        if not token_list:
-            return {'lexical_diversity': 0.0, 'avg_word_length': 0.0, 'vowel_ratio': 0.0}
-        length = len(token_list)
-        uniq = len(set(token_list))
-        lexical_diversity = self._round(uniq / length)
-        avg_word_len = sum(len(t) for t in token_list) / length
-        avg_word_length = self._round(min(avg_word_len / 12.0, 1.0))
-        vowels = sum(sum(1 for ch in t if ch in 'aeiou') for t in token_list)
-        vowel_ratio = self._round(vowels / (length * 3))
-        return {
-            'lexical_diversity': lexical_diversity,
-            'avg_word_length': avg_word_length,
-            'vowel_ratio': vowel_ratio,
-        }
-
-    def _flatten_metrics(self, nested: Dict[str, Any]) -> Dict[str, Any]:
-        flat: Dict[str, Any] = {}
-        for family, values in nested.items():
-            if family == 'advanced_features':
-                flat.update(values)
-                continue
-            for key, value in values.items():
-                new_key = key if family != 'core_metrics' else f"core_{key}"
-                if new_key in flat:
-                    new_key = f"{family}_{key}"
-                flat[new_key] = value
-        if 'lexical_diversity' not in flat and 'core_lexical_diversity' in flat:
-            flat['lexical_diversity'] = flat['core_lexical_diversity']
-        return flat
-
-    def _aggregate_windows(self, slices: Dict[str, List[Any]]):
-        window_entries: Dict[str, List[Dict[str, Any]]] = {}
-        window_matrices: Dict[str, List[List[float]]] = {}
-        for name, ranges in slices.items():
-            entries, matrices = [], []
-            for start, end in ranges:
-                window_tokens = self.tokens[start:end]
-                window_text = " ".join(window_tokens)
-                metrics = self._flatten_metrics(self._compute_family_metrics(window_text))
-                metrics['window_start'] = start
-                metrics['window_end'] = end
-                entries.append(metrics)
-                matrices.append([
-                    metrics.get('lexical_diversity', 0.0),
-                    metrics.get('core_avg_word_length', metrics.get('avg_word_length', 0.0)),
-                    metrics.get('core_vowel_ratio', metrics.get('vowel_ratio', 0.0))
-                ])
-            window_entries[name] = entries
-            window_matrices[name] = matrices
-        return window_entries, window_matrices
-
-    def _build_temporal_trends(self, window_entries: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
-        tracked = ['logical_coherence', 'emotional_valence', 'persuasiveness', 'factual_density', 'lexical_diversity']
-        trends: Dict[str, Dict[str, Any]] = {}
-        for name, entries in window_entries.items():
-            metrics: Dict[str, Any] = {}
-            for metric in tracked:
-                values = [entry.get(metric) for entry in entries if isinstance(entry.get(metric), (int, float))]
-                if not values:
-                    continue
-                metric_trend = {
-                    'mean': self._round(float(np.mean(values))),
-                    'std': self._round(float(np.std(values))) if len(values) > 1 else 0.0,
-                    'min': self._round(min(values)),
-                    'max': self._round(max(values)),
-                    'trend': 'increasing' if values[-1] > values[0] else ('decreasing' if values[-1] < values[0] else 'stable'),
-                    'volatility': self._round(float(np.std(np.diff(values)))) if len(values) > 2 else 0.0,
-                }
-                metrics[metric] = metric_trend
-            if metrics:
-                trends[name] = metrics
-        return trends
-
-    def _build_metadata(self, window_entries: Dict[str, List[Dict[str, Any]]], start_time: float, commit_sha: str) -> Dict[str, Any]:
-        window_sizes = {}
-        for key in window_entries:
+class AdvancedNLPAnalyzer(BaseParser):
+    """
+    Advanced NLP Analyzer implementing temporal orthogonal functions for comprehensive
+    text-to-numerical-data transformation.
+    """
+    
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.nlp = None
+        self.window_sizes = [100, 200, 300, 600]
+        self.temporal_analysis = {}
+        
+    def _load_spacy_model(self):
+        """Lazy load spacy model to avoid loading if not needed."""
+        if self.nlp is None:
             try:
-                size_part = key.split('_', 1)[1]
-                window_sizes[key] = len(window_entries[key])
-            except Exception:
-                window_sizes[key] = len(window_entries[key])
-        return {
-            'seed': self.seed,
-            'version_hash': self._version_hash(commit_sha),
-            'schema_version': '1.0',
-            'analysis_time_seconds': round(time.time() - start_time, 3),
-            'total_tokens': len(self.tokens),
-            'window_sizes': list(window_sizes.keys()),
-            'total_windows': window_sizes,
-        }
-
-    def run_complete_analysis(self, commit_sha: str = "UNKNOWN") -> Dict[str, Any]:
-        start_time = time.time()
-        slices = self._window_slices()
-        window_entries, window_matrices = self._aggregate_windows(slices)
-        full_metrics = self._flatten_metrics(self._compute_family_metrics())
-        temporal_trends = self._build_temporal_trends(window_entries)
-        all_rows = [row for rows in window_matrices.values() for row in rows if any(row)]
-        orthogonal = self._orthogonalize_matrix(all_rows) if self.config.orthogonalize and all_rows else None
-        attributions = {'top_tokens': sorted(self.domain_keywords, key=lambda t: (-len(t), t))[:10]}
-        metadata = self._build_metadata(window_entries, start_time, commit_sha)
-        output = {
-            'full_text_analysis': full_metrics,
-            'window_analyses': window_entries,
-            'temporal_trends': temporal_trends,
-            'metadata': metadata,
-            'explainability': attributions,
-        }
-        if orthogonal:
-            output['orthogonalization'] = orthogonal
-        out_path = os.path.join(self.config.results_dir, f"analysis_{self.seed}.json")
-        with open(out_path, 'w', encoding='utf-8') as fh:
-            json.dump(output, fh, indent=2)
-        attr_path = os.path.join(self.config.results_dir, f"attributions_{self.seed}.json")
-        with open(attr_path, 'w', encoding='utf-8') as fh:
-            json.dump(attributions, fh, indent=2)
-        self.counts['advanced_nlp_analysis'] = full_metrics
-        self.counts['advanced_nlp_metadata'] = metadata
-        self.metadata = output
-        return output
-
-    def analyze_temporal_windows(self) -> Dict[str, Any]:
-        return self.run_complete_analysis(commit_sha="TEMPORAL_ANALYSIS")
-
-    def analyze_logical_coherence(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
+                self.nlp = spacy.load('en_core_web_sm')
+            except Exception as e:
+                self.counts["spacy_error"] = str(e)
+                self.nlp = None
+        return self.nlp is not None
+    
+    def _tokenize_by_words(self, text: str) -> List[str]:
+        """Tokenize text into words."""
+        return word_tokenize(text)
+    
+    def _create_windows(self, tokens: List[str], window_size: int) -> List[List[str]]:
+        """Create sliding windows of specified size from tokens."""
+        if window_size >= len(tokens):
+            return [tokens]
+        windows = []
+        for i in range(0, len(tokens) - window_size + 1, window_size // 2):  # 50% overlap
+            windows.append(tokens[i:i + window_size])
+        return windows
+    
+    def _normalize_score(self, value: float, min_val: float = 0, max_val: float = 1) -> float:
+        """Normalize a score to [0, 1] range."""
+        if max_val == min_val:
+            return 0.5
+        normalized = (value - min_val) / (max_val - min_val)
+        return max(0.0, min(1.0, normalized))
+    
+    # ========== R - Reasoning / Logic Structure ==========
+    
+    def analyze_logical_coherence(self, text: str) -> float:
+        """
+        Measure internal logical consistency using sentence-to-sentence similarity.
+        Returns a score in [0, 1] where higher means more coherent.
+        """
+        sentences = sent_tokenize(text)
         if len(sentences) < 2:
-            return 1.0 if sentences else 0.0
-        overlaps = []
-        for i in range(len(sentences) - 1):
-            s1 = set(simple_tokenize(sentences[i]))
-            s2 = set(simple_tokenize(sentences[i + 1]))
-            if not s1 or not s2:
-                overlaps.append(0.0)
-            else:
-                overlaps.append(len(s1 & s2) / len(s1 | s2))
-        return self._round(float(np.mean(overlaps)))
-
-    def analyze_causal_density(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        causal = sum(1 for token in tokens if token in CAUSAL_WORDS)
-        return self._safe_ratio(causal, len(tokens))
-
-    def analyze_argumentation_entropy(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        premises = sum(1 for token in tokens if token in {"because", "since", "as"})
-        conclusions = sum(1 for token in tokens if token in {"therefore", "thus", "hence", "so"})
-        total = premises + conclusions
-        if total == 0:
-            return 0.0
-        balance = 1 - abs(premises - conclusions) / total
-        return self._round(balance)
-
-    def analyze_contradiction_ratio(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        contradictions = sum(1 for token in tokens if token in {"however", "but", "although", "nevertheless"})
-        return self._safe_ratio(contradictions, len(tokens))
-
-    def analyze_inferential_depth(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        depth_markers = sum(1 for token in tokens if token in {"if", "unless", "therefore", "implies"})
-        return self._safe_ratio(depth_markers, len(tokens))
-
-    def analyze_domain_consistency(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return 0.0
-        hits = sum(1 for token in tokens if token in self.domain_keywords)
-        return self._safe_ratio(hits, len(tokens))
-
-    def analyze_referential_stability(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        pronouns = sum(1 for token in tokens if token in {"he", "she", "they", "it", "this", "that"})
-        return self._round(1.0 - self._safe_ratio(pronouns, len(tokens), scale=2.5))
-
-    def analyze_temporal_consistency(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return 0.0
-        past = sum(1 for token in tokens if token.endswith('ed'))
-        present = sum(1 for token in tokens if token.endswith('ing'))
-        total = past + present
-        if total == 0:
-            return 0.0
-        balance = 1 - abs(past - present) / total
-        return self._round(balance)
-
-    def analyze_modality_balance(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return 0.0
-        ratio = sum(1 for token in tokens if token in MODAL_WORDS) / len(tokens)
-        return self._round(1 - min(1.0, abs(ratio - 0.2) / 0.2))
-
-    def analyze_precision_index(self, text: Optional[str] = None) -> float:
-        numbers = re.findall(r"\b\d+(?:\.\d+)?\b", text or self.text)
-        tokens = self._get_tokens(text)
-        precise_terms = sum(1 for token in tokens if token in {"exactly", "precisely", "specifically", "accurately"})
-        return self._safe_ratio(len(numbers) + precise_terms, max(1, len(tokens)))
-
-    def analyze_goal_clarity(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        clarity_terms = sum(1 for token in tokens if token in {"goal", "objective", "aim", "target", "purpose", "ensure"})
-        return self._safe_ratio(clarity_terms, len(tokens))
-
-    def analyze_focus_retention(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return 0.0
-        first_sentence_tokens = set(self._get_tokens(self._split_sentences(text)[0])) if self._split_sentences(text) else set()
-        aligned = sum(1 for token in tokens if token in first_sentence_tokens)
-        return self._safe_ratio(aligned, len(tokens))
-
-    def analyze_persuasiveness(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        persuasive_terms = sum(1 for token in tokens if token in PERSUASIVE_WORDS)
-        return self._safe_ratio(persuasive_terms, len(tokens))
-
-    def analyze_commitment(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        hedges = sum(1 for token in tokens if token in HEDGE_TERMS)
-        return self._round(1.0 - self._safe_ratio(hedges, len(tokens), scale=3.0))
-
-    def analyze_teleology(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        sequences = sum(1 for i in range(len(tokens) - 1) if tokens[i] == "to" and tokens[i + 1] in PURPOSE_WORDS)
-        return self._safe_ratio(sequences, len(tokens))
-
-    def analyze_emotional_valence(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        positive = sum(1 for token in tokens if token in POSITIVE_WORDS)
-        negative = sum(1 for token in tokens if token in NEGATIVE_WORDS)
-        total = positive + negative
+            return 1.0
+        
+        try:
+            vectorizer = TfidfVectorizer()
+            vectors = vectorizer.fit_transform(sentences)
+            similarities = []
+            
+            for i in range(len(sentences) - 1):
+                sim = cosine_similarity(vectors[i:i+1], vectors[i+1:i+2])[0][0]
+                similarities.append(sim)
+            
+            return float(np.mean(similarities)) if similarities else 0.5
+        except:
+            return 0.5
+    
+    def analyze_causal_density(self, text: str) -> float:
+        """
+        Count cause-effect relationships using causal markers.
+        Returns normalized density.
+        """
+        causal_markers = [
+            'because', 'therefore', 'thus', 'hence', 'consequently',
+            'as a result', 'leads to', 'causes', 'due to', 'since',
+            'so that', 'in order to', 'results in'
+        ]
+        
+        text_lower = text.lower()
+        count = sum(text_lower.count(marker) for marker in causal_markers)
+        words = len(word_tokenize(text))
+        
+        # Normalize by text length
+        return self._normalize_score(count / max(words / 100, 1), 0, 5)
+    
+    def analyze_argumentation_entropy(self, text: str) -> float:
+        """
+        Measure balance of claims vs evidence using Toulmin model indicators.
+        Returns entropy score [0, 1].
+        """
+        claims = ['claim', 'argue', 'assert', 'maintain', 'contend', 'believe']
+        evidence = ['evidence', 'proof', 'data', 'study', 'research', 'shows', 'demonstrates']
+        
+        text_lower = text.lower()
+        claim_count = sum(text_lower.count(word) for word in claims)
+        evidence_count = sum(text_lower.count(word) for word in evidence)
+        
+        total = claim_count + evidence_count
         if total == 0:
             return 0.5
-        score = (positive - negative + total) / (2 * total)
-        return self._round(score)
-
-    def analyze_arousal(self, text: Optional[str] = None) -> float:
-        text_segment = text or self.text
-        markers = text_segment.count('!') + sum(1 for token in self._get_tokens(text) if token in {"exciting", "thrilling", "urgent", "intense"})
-        return self._safe_ratio(markers, len(self._get_tokens(text)) or len(text_segment))
-
-    def analyze_empathy_score(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        empathy_terms = sum(1 for token in tokens if token in EMPATHY_WORDS or token in INCLUSIVE_PRONOUNS)
-        return self._safe_ratio(empathy_terms, len(tokens))
-
-    def analyze_emotional_volatility(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
+        
+        # Shannon entropy of claim/evidence distribution
+        p_claim = claim_count / total
+        p_evidence = evidence_count / total
+        
+        entropy = 0
+        if p_claim > 0:
+            entropy -= p_claim * np.log2(p_claim)
+        if p_evidence > 0:
+            entropy -= p_evidence * np.log2(p_evidence)
+        
+        return float(entropy)  # Max entropy is 1 for binary distribution
+    
+    def analyze_contradiction_ratio(self, text: str) -> float:
+        """
+        Detect internal contradictions using sentiment and negation analysis.
+        Returns ratio [0, 1] where higher means more contradictions.
+        """
+        sentences = sent_tokenize(text)
         if len(sentences) < 2:
             return 0.0
-        polarities = [TextBlob(sentence).sentiment.polarity for sentence in sentences]
-        return self._round(float(np.std(polarities)))
-
-    def analyze_symbolic_resonance(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        imagery_terms = sum(1 for token in tokens if token in IMAGERY_WORDS)
-        return self._safe_ratio(imagery_terms, len(tokens))
-
-    def analyze_speech_act_ratio(self, text: Optional[str] = None) -> Dict[str, float]:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return {'assertive': 0.0, 'directive': 0.0, 'expressive': 0.0}
-        assertive = sum(1 for token in tokens if token in {"state", "explain", "report", "describe"})
-        directive = sum(1 for token in tokens if token in {"ask", "request", "should", "must", "please"})
-        expressive = sum(1 for token in tokens if token in {"thanks", "sorry", "congrats", "love", "feel"})
-        total = max(1, assertive + directive + expressive)
-        return {
-            'assertive': self._round(assertive / total),
-            'directive': self._round(directive / total),
-            'expressive': self._round(expressive / total),
-        }
-
-    def analyze_dialogue_coherence(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if len(sentences) < 2:
-            return 0.0
-        questions = [i for i, sentence in enumerate(sentences) if sentence.strip().endswith('?')]
-        if not questions:
-            return 0.0
-        followups = sum(1 for idx in questions if idx + 1 < len(sentences) and not sentences[idx + 1].strip().endswith('?'))
-        return self._round(followups / len(questions))
-
-    def analyze_pragmatic_truth(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        informative = sum(1 for token in tokens if token not in STOPWORDS and len(token) > 3)
-        return self._safe_ratio(informative, len(tokens))
-
-    def analyze_social_tone(self, text: Optional[str] = None) -> Dict[str, float]:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return {'politeness': 0.0, 'cooperation': 0.0, 'dominance': 0.0}
-        politeness = sum(1 for token in tokens if token in {"please", "thank", "appreciate", "welcome"})
-        cooperation = sum(1 for token in tokens if token in {"together", "share", "collaborate", "support"})
-        dominance = sum(1 for token in tokens if token in {"must", "need", "command", "insist"})
-        total = max(1, politeness + cooperation + dominance)
-        return {
-            'politeness': self._round(politeness / total),
-            'cooperation': self._round(cooperation / total),
-            'dominance': self._round(dominance / total),
-        }
-
-    def analyze_engagement_index(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        engagement = sum(1 for token in tokens if token in ENGAGEMENT_PRONOUNS)
-        return self._safe_ratio(engagement, len(tokens))
-
-    def analyze_rhythm_variance(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if not sentences:
-            return 0.0
-        lengths = [max(1, len(simple_tokenize(sentence))) for sentence in sentences]
-        mean_length = float(np.mean(lengths))
-        if mean_length == 0:
-            return 0.0
-        return self._round(float(np.std(lengths) / mean_length))
-
-    def analyze_lexical_diversity(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        return self._round(len(set(tokens)) / max(1, len(tokens)))
-
-    def analyze_imagery_density(self, text: Optional[str] = None) -> float:
-        return self.analyze_symbolic_resonance(text)
-
-    def analyze_symmetry_index(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if len(sentences) < 2:
-            return 0.0
-        halves = np.array_split([len(simple_tokenize(s)) for s in sentences], 2)
-        diff = abs(halves[0].mean() - halves[1].mean())
-        baseline = max(halves[0].mean(), halves[1].mean(), 1)
-        return self._round(1 - min(1.0, diff / baseline))
-
-    def analyze_surprise_novelty(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        if not tokens:
-            return 0.0
-        token_counts = Counter(tokens)
-        hapax = sum(1 for _, count in token_counts.items() if count == 1)
-        return self._safe_ratio(hapax, len(tokens))
-
-    def analyze_factual_density(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if not sentences:
-            return 0.0
-        factual_markers = sum(1 for sentence in sentences if any(marker in sentence.lower() for marker in ["according to", "study", "research", "data", "evidence"]))
-        return self._safe_ratio(factual_markers, len(sentences))
-
-    def analyze_fact_precision(self, text: Optional[str] = None) -> float:
-        numbers = re.findall(r"\b\d+(?:\.\d+)?\b", text or self.text)
-        tokens = self._get_tokens(text)
-        proper_nouns = sum(1 for token in tokens if token.istitle())
-        return self._safe_ratio(len(numbers) + proper_nouns, max(1, len(tokens)))
-
-    def analyze_evidence_linkage(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        citations = sum(1 for token in tokens if token in {"according", "cited", "reported", "study", "research"})
-        return self._safe_ratio(citations, len(tokens))
-
-    def analyze_truth_confidence(self, text: Optional[str] = None) -> float:
-        return self._round(1.0 - self.analyze_vagueness(text))
-
-    def analyze_source_diversity(self, text: Optional[str] = None) -> float:
-        lower = (text or self.text).lower()
-        sources = re.findall(r"\b(according to|reported by|source|study|research)\s+([A-Z][a-zA-Z]+)", lower)
-        unique = len({match[1] for match in sources})
-        return self._safe_ratio(unique, len(self._split_sentences(text)) or len(self.tokens))
-
-    def analyze_ambiguity_entropy(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        ambiguous = sum(1 for token in tokens if token in AMBIGUOUS_WORDS)
-        return self._safe_ratio(ambiguous, len(tokens))
-
-    def analyze_vagueness(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        vague_terms = sum(1 for token in tokens if token in VAGUE_TERMS)
-        return self._safe_ratio(vague_terms, len(tokens))
-
-    def analyze_cognitive_dissonance(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if len(sentences) < 2:
-            return 0.0
-        sentiments = [TextBlob(sentence).sentiment.polarity for sentence in sentences]
-        flips = sum(1 for i in range(len(sentiments) - 1) if sentiments[i] * sentiments[i + 1] < 0)
-        return self._safe_ratio(flips, len(sentiments) - 1)
-
-    def analyze_hypothetical_load(self, text: Optional[str] = None) -> float:
-        tokens = self._get_tokens(text)
-        hypothetical = sum(1 for token in tokens if token in HYPOTHETICAL_TERMS)
-        return self._safe_ratio(hypothetical, len(tokens))
-
-    def analyze_certainty_oscillation(self, text: Optional[str] = None) -> float:
-        sentences = self._split_sentences(text)
-        if len(sentences) < 2:
-            return 0.0
-        certainty_series = []
+        
+        contradictions = 0
+        total_pairs = 0
+        
+        for i in range(len(sentences)):
+            for j in range(i + 1, min(i + 5, len(sentences))):  # Check nearby sentences
+                sent1 = TextBlob(sentences[i])
+                sent2 = TextBlob(sentences[j])
+                
+                # Check sentiment opposition
+                if sent1.sentiment.polarity * sent2.sentiment.polarity < -0.3:
+                    contradictions += 1
+                
+                total_pairs += 1
+        
+        return self._normalize_score(contradictions / max(total_pairs, 1), 0, 0.3)
+    
+    def analyze_inferential_depth(self, text: str) -> float:
+        """
+        Measure average reasoning depth using subordinate clauses and conjunctions.
+        Returns normalized depth score.
+        """
+        sentences = sent_tokenize(text)
+        depths = []
+        
         for sentence in sentences:
-            stokens = simple_tokenize(sentence)
-            certain = sum(1 for token in stokens if token in {"must", "will", "always", "never", "definitely"})
-            uncertain = sum(1 for token in stokens if token in HEDGE_TERMS or token in VAGUE_TERMS)
-            total = max(1, certain + uncertain)
-            certainty_series.append(certain / total)
-        return self._round(float(np.std(certainty_series)))
-
-    def extract_named_entities_advanced(self, text: Optional[str] = None) -> Dict[str, Any]:
-        segment = text or self.text
-        nlp = _ensure_spacy_model()
-        if nlp:
-            doc = nlp(segment)
-            counts = Counter(ent.label_ for ent in doc.ents)
-            total = sum(counts.values())
-            density = self._safe_ratio(total, len(self._get_tokens(segment)))
-            return {
-                'total_entities': int(total),
-                'entity_counts': dict(counts),
-                'entity_density': density,
-            }
-        matches = re.findall(r"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b", segment)
-        counts = Counter("PROPER" for _ in matches)
-        density = self._safe_ratio(len(matches), len(self._get_tokens(segment)))
-        return {
-            'total_entities': len(matches),
-            'entity_counts': dict(counts),
-            'entity_density': density,
-        }
-
-    def extract_relationships(self, text: Optional[str] = None) -> Dict[str, Any]:
-        segment = text or self.text
-        sentences = self._split_sentences(segment)
-        patterns = [
-            r'(?P<subject>[A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)*)\s+(?P<verb>works at|met|founded|leads|joined|manages)\s+(?P<object>[A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)*)',
-            r'(?P<subject>[A-Z][a-zA-Z]+)\s+(?P<verb>collaborated with|partnered with|supports)\s+(?P<object>[A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)*)',
+            # Count subordinating conjunctions and relative pronouns
+            depth_markers = ['if', 'when', 'because', 'although', 'unless', 'while',
+                           'that', 'which', 'who', 'where', 'whether']
+            words = word_tokenize(sentence.lower())
+            depth = sum(1 for word in words if word in depth_markers)
+            depths.append(depth)
+        
+        avg_depth = np.mean(depths) if depths else 0
+        return self._normalize_score(avg_depth, 0, 3)
+    
+    # ========== C - Constraints / Context Integrity ==========
+    
+    def analyze_domain_consistency(self, text: str, domain_keywords: List[str] = None) -> float:
+        """
+        Measure vocabulary consistency within topic bounds.
+        Returns consistency score [0, 1].
+        """
+        if not domain_keywords:
+            # Extract top keywords as domain
+            words = word_tokenize(text.lower())
+            word_freq = Counter(words)
+            domain_keywords = [word for word, _ in word_freq.most_common(10)]
+        
+        sentences = sent_tokenize(text)
+        consistency_scores = []
+        
+        for sentence in sentences:
+            words = set(word_tokenize(sentence.lower()))
+            overlap = len(words.intersection(set(domain_keywords)))
+            consistency_scores.append(overlap / max(len(words), 1))
+        
+        return float(np.mean(consistency_scores)) if consistency_scores else 0.5
+    
+    def analyze_referential_stability(self, text: str) -> float:
+        """
+        Track entity persistence using NER.
+        Returns stability score [0, 1].
+        """
+        if not self._load_spacy_model():
+            return 0.5
+        
+        doc = self.nlp(text)
+        entities = [ent.text for ent in doc.ents]
+        
+        if not entities:
+            return 0.5
+        
+        # Measure entity repetition (stability)
+        entity_counts = Counter(entities)
+        avg_repetition = np.mean(list(entity_counts.values()))
+        
+        return self._normalize_score(avg_repetition, 1, 5)
+    
+    def analyze_temporal_consistency(self, text: str) -> float:
+        """
+        Analyze verb tense coherence.
+        Returns consistency score [0, 1].
+        """
+        if not self._load_spacy_model():
+            # Fallback: simple pattern matching
+            past_markers = len(re.findall(r'\b\w+ed\b', text))
+            present_markers = len(re.findall(r'\b\w+s\b', text))
+            future_markers = text.lower().count('will') + text.lower().count('shall')
+            
+            total = past_markers + present_markers + future_markers
+            if total == 0:
+                return 0.5
+            
+            # Entropy of tense distribution
+            tenses = [past_markers, present_markers, future_markers]
+            probs = [t / total for t in tenses if t > 0]
+            entropy = -sum(p * np.log2(p) for p in probs if p > 0)
+            
+            # Lower entropy = more consistent
+            return 1.0 - self._normalize_score(entropy, 0, 1.58)  # log2(3) max entropy
+        
+        doc = self.nlp(text)
+        tenses = [token.tag_ for token in doc if token.pos_ == 'VERB']
+        
+        if not tenses:
+            return 0.5
+        
+        tense_counts = Counter(tenses)
+        dominant_tense_ratio = max(tense_counts.values()) / len(tenses)
+        
+        return float(dominant_tense_ratio)
+    
+    def analyze_modality_balance(self, text: str) -> float:
+        """
+        Measure balance between fact and possibility statements.
+        Returns balance score [0, 1].
+        """
+        modal_verbs = ['can', 'could', 'may', 'might', 'must', 'should', 'would', 'shall', 'will']
+        
+        words = word_tokenize(text.lower())
+        modal_count = sum(1 for word in words if word in modal_verbs)
+        
+        # Balance is when modals are ~10-20% of verbs
+        verb_count = sum(1 for word in words if word.endswith('s') or word.endswith('ed') or word.endswith('ing'))
+        
+        if verb_count == 0:
+            return 0.5
+        
+        modal_ratio = modal_count / verb_count
+        # Optimal balance around 0.15
+        balance = 1.0 - abs(modal_ratio - 0.15) / 0.15
+        
+        return max(0.0, min(1.0, balance))
+    
+    def analyze_precision_index(self, text: str) -> float:
+        """
+        Measure specificity vs ambiguity using lexical density.
+        Returns precision score [0, 1].
+        """
+        words = word_tokenize(text)
+        unique_words = set(word.lower() for word in words)
+        
+        # Type-token ratio as precision measure
+        lexical_density = len(unique_words) / max(len(words), 1)
+        
+        # Adjust for vague quantifiers
+        vague_words = ['some', 'many', 'few', 'several', 'various', 'about', 'approximately']
+        vague_count = sum(text.lower().count(word) for word in vague_words)
+        vague_penalty = self._normalize_score(vague_count / max(len(words) / 100, 1), 0, 5)
+        
+        precision = lexical_density * (1 - 0.3 * vague_penalty)
+        
+        return max(0.0, min(1.0, precision))
+    
+    # ========== G - Goals / Intent & Direction ==========
+    
+    def analyze_goal_clarity(self, text: str) -> float:
+        """
+        Measure clarity of stated intent.
+        Returns clarity score [0, 1].
+        """
+        goal_markers = ['goal', 'aim', 'objective', 'purpose', 'intend', 'plan', 'want', 'need']
+        
+        text_lower = text.lower()
+        goal_count = sum(text_lower.count(marker) for marker in goal_markers)
+        
+        sentences = sent_tokenize(text)
+        goal_sentences = sum(1 for s in sentences if any(marker in s.lower() for marker in goal_markers))
+        
+        # Clarity based on explicit goal statements
+        clarity = goal_sentences / max(len(sentences), 1)
+        
+        return self._normalize_score(clarity, 0, 0.3)
+    
+    def analyze_focus_retention(self, text: str) -> float:
+        """
+        Measure topic drift over time using moving window cosine similarity.
+        Returns retention score [0, 1] where higher means less drift.
+        """
+        sentences = sent_tokenize(text)
+        if len(sentences) < 3:
+            return 1.0
+        
+        try:
+            vectorizer = TfidfVectorizer()
+            vectors = vectorizer.fit_transform(sentences)
+            
+            # Compare first quarter with last quarter
+            first_quarter = int(len(sentences) * 0.25)
+            last_quarter = int(len(sentences) * 0.75)
+            
+            first_vec = vectors[:first_quarter].mean(axis=0)
+            last_vec = vectors[last_quarter:].mean(axis=0)
+            
+            similarity = cosine_similarity(first_vec, last_vec)[0][0]
+            
+            return float(similarity)
+        except:
+            return 0.5
+    
+    def analyze_persuasiveness(self, text: str) -> float:
+        """
+        Measure rhetorical strength using appeal indicators.
+        Returns persuasiveness score [0, 1].
+        """
+        # Rhetorical appeals
+        ethos_markers = ['expert', 'research', 'study', 'proven', 'demonstrated']
+        pathos_markers = ['feel', 'believe', 'imagine', 'consider', 'think']
+        logos_markers = ['therefore', 'thus', 'evidence', 'shows', 'indicates']
+        
+        text_lower = text.lower()
+        
+        ethos = sum(text_lower.count(marker) for marker in ethos_markers)
+        pathos = sum(text_lower.count(marker) for marker in pathos_markers)
+        logos = sum(text_lower.count(marker) for marker in logos_markers)
+        
+        total_appeals = ethos + pathos + logos
+        words = len(word_tokenize(text))
+        
+        persuasiveness = total_appeals / max(words / 100, 1)
+        
+        return self._normalize_score(persuasiveness, 0, 5)
+    
+    def analyze_commitment(self, text: str) -> float:
+        """
+        Measure modal certainty (opposite of hedging).
+        Returns commitment score [0, 1].
+        """
+        hedging_words = ['may', 'might', 'could', 'possibly', 'perhaps', 'maybe']
+        certain_words = ['will', 'must', 'definitely', 'certainly', 'absolutely', 'clearly']
+        
+        text_lower = text.lower()
+        
+        hedge_count = sum(text_lower.count(word) for word in hedging_words)
+        certain_count = sum(text_lower.count(word) for word in certain_words)
+        
+        total = hedge_count + certain_count
+        if total == 0:
+            return 0.5
+        
+        commitment = certain_count / total
+        
+        return float(commitment)
+    
+    def analyze_teleology(self, text: str) -> float:
+        """
+        Measure purpose-driven phrasing.
+        Returns teleology score [0, 1].
+        """
+        purpose_markers = [
+            'to achieve', 'in order to', 'for the purpose of', 'aimed at',
+            'designed to', 'intended to', 'so that', 'to ensure'
         ]
-        relationships = []
+        
+        text_lower = text.lower()
+        purpose_count = sum(text_lower.count(marker) for marker in purpose_markers)
+        
+        sentences = sent_tokenize(text)
+        teleology = purpose_count / max(len(sentences), 1)
+        
+        return self._normalize_score(teleology, 0, 0.5)
+    
+    # ========== E - Emotion / Expressive Content ==========
+    
+    def analyze_emotional_valence(self, text: str) -> float:
+        """
+        Measure positive/negative emotion.
+        Returns valence score [-1, 1] normalized to [0, 1].
+        """
+        blob = TextBlob(text)
+        polarity = blob.sentiment.polarity
+        
+        # Convert from [-1, 1] to [0, 1]
+        return (polarity + 1) / 2
+    
+    def analyze_arousal(self, text: str) -> float:
+        """
+        Measure emotional intensity using exclamations and amplifiers.
+        Returns arousal score [0, 1].
+        """
+        exclamations = text.count('!')
+        caps_words = sum(1 for word in word_tokenize(text) if word.isupper() and len(word) > 1)
+        
+        amplifiers = ['very', 'extremely', 'incredibly', 'highly', 'absolutely']
+        amplifier_count = sum(text.lower().count(amp) for amp in amplifiers)
+        
+        words = len(word_tokenize(text))
+        
+        arousal = (exclamations + caps_words + amplifier_count) / max(words / 50, 1)
+        
+        return self._normalize_score(arousal, 0, 5)
+    
+    def analyze_empathy_score(self, text: str) -> float:
+        """
+        Measure perspective-taking tone using pronouns and sentiment.
+        Returns empathy score [0, 1].
+        """
+        perspective_words = ['you', 'your', 'we', 'our', 'us', 'understand', 'feel']
+        
+        text_lower = text.lower()
+        words = word_tokenize(text_lower)
+        
+        perspective_count = sum(1 for word in words if word in perspective_words)
+        
+        # Combine with positive sentiment
+        blob = TextBlob(text)
+        sentiment = max(blob.sentiment.polarity, 0)  # Only positive contributes to empathy
+        
+        empathy = (perspective_count / max(len(words) / 50, 1)) * (1 + sentiment) / 2
+        
+        return self._normalize_score(empathy, 0, 3)
+    
+    def analyze_emotional_volatility(self, text: str) -> float:
+        """
+        Measure sentiment change rate across windows.
+        Returns volatility score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        if len(sentences) < 2:
+            return 0.0
+        
+        sentiments = [TextBlob(sent).sentiment.polarity for sent in sentences]
+        
+        # Calculate standard deviation of sentiment changes
+        changes = [abs(sentiments[i+1] - sentiments[i]) for i in range(len(sentiments)-1)]
+        
+        volatility = np.std(changes) if changes else 0
+        
+        return self._normalize_score(volatility, 0, 0.5)
+    
+    def analyze_symbolic_resonance(self, text: str) -> float:
+        """
+        Measure metaphor density using figurative language indicators.
+        Returns resonance score [0, 1].
+        """
+        metaphor_markers = ['like', 'as if', 'as though', 'metaphorically', 'symbolically']
+        figurative = ['represents', 'symbolizes', 'embodies', 'reflects']
+        
+        text_lower = text.lower()
+        
+        metaphor_count = sum(text_lower.count(marker) for marker in metaphor_markers)
+        figurative_count = sum(text_lower.count(word) for word in figurative)
+        
+        words = len(word_tokenize(text))
+        
+        resonance = (metaphor_count + figurative_count) / max(words / 100, 1)
+        
+        return self._normalize_score(resonance, 0, 3)
+    
+    # ========== P - Pragmatic / Contextual Use ==========
+    
+    def analyze_speech_act_ratio(self, text: str) -> Dict[str, float]:
+        """
+        Classify sentences by speech act type.
+        Returns distribution of assertive, directive, expressive acts.
+        """
+        sentences = sent_tokenize(text)
+        
+        assertive = 0  # Statements
+        directive = 0  # Commands, requests
+        expressive = 0  # Emotions, opinions
+        
+        directive_markers = ['please', 'must', 'should', 'need to', 'have to', 'let us']
+        expressive_markers = ['feel', 'think', 'believe', 'hope', 'wish', 'unfortunately', 'fortunately']
+        
         for sentence in sentences:
-            for pattern in patterns:
-                for match in re.finditer(pattern, sentence):
-                    relationships.append({
-                        'subject': match.group('subject'),
-                        'verb': match.group('verb'),
-                        'object': match.group('object'),
-                        'sentence': sentence.strip(),
-                    })
+            sent_lower = sentence.lower()
+            
+            if sentence.endswith('?'):
+                continue  # Questions are separate
+            elif any(marker in sent_lower for marker in directive_markers):
+                directive += 1
+            elif any(marker in sent_lower for marker in expressive_markers):
+                expressive += 1
+            else:
+                assertive += 1
+        
+        total = max(len(sentences), 1)
+        
         return {
+            'assertive': assertive / total,
+            'directive': directive / total,
+            'expressive': expressive / total
+        }
+    
+    def analyze_dialogue_coherence(self, text: str) -> float:
+        """
+        Measure question-answer quality using adjacency pair detection.
+        Returns coherence score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        qa_pairs = 0
+        questions = 0
+        
+        for i in range(len(sentences) - 1):
+            if sentences[i].endswith('?'):
+                questions += 1
+                # Check if next sentence is an answer
+                if not sentences[i + 1].endswith('?'):
+                    qa_pairs += 1
+        
+        if questions == 0:
+            return 0.5  # No questions = neutral coherence
+        
+        return qa_pairs / questions
+    
+    def analyze_pragmatic_truth(self, text: str) -> float:
+        """
+        Measure informativeness vs filler content.
+        Returns truth score [0, 1].
+        """
+        filler_words = ['um', 'uh', 'like', 'you know', 'actually', 'basically', 'literally']
+        
+        text_lower = text.lower()
+        words = word_tokenize(text_lower)
+        
+        filler_count = sum(text_lower.count(filler) for filler in filler_words)
+        
+        # Informativeness is inverse of filler ratio
+        informativeness = 1.0 - self._normalize_score(filler_count / max(len(words), 1), 0, 0.1)
+        
+        return informativeness
+    
+    def analyze_social_tone(self, text: str) -> Dict[str, float]:
+        """
+        Analyze politeness, dominance, cooperation.
+        Returns tone scores.
+        """
+        politeness_markers = ['please', 'thank', 'sorry', 'excuse', 'pardon', 'kindly']
+        dominance_markers = ['must', 'will', 'shall', 'demand', 'require', 'insist']
+        cooperation_markers = ['we', 'us', 'our', 'together', 'collaborate', 'team']
+        
+        text_lower = text.lower()
+        words = len(word_tokenize(text))
+        
+        politeness = sum(text_lower.count(marker) for marker in politeness_markers)
+        dominance = sum(text_lower.count(marker) for marker in dominance_markers)
+        cooperation = sum(text_lower.count(marker) for marker in cooperation_markers)
+        
+        return {
+            'politeness': self._normalize_score(politeness / max(words / 100, 1), 0, 3),
+            'dominance': self._normalize_score(dominance / max(words / 100, 1), 0, 3),
+            'cooperation': self._normalize_score(cooperation / max(words / 100, 1), 0, 3)
+        }
+    
+    def analyze_engagement_index(self, text: str) -> float:
+        """
+        Measure direct audience addressing.
+        Returns engagement score [0, 1].
+        """
+        engagement_words = ['you', 'your', 'we', 'us', 'our']
+        
+        words = word_tokenize(text.lower())
+        engagement_count = sum(1 for word in words if word in engagement_words)
+        
+        engagement = engagement_count / max(len(words), 1)
+        
+        return self._normalize_score(engagement, 0, 0.2)
+    
+    # ========== A - Aesthetic / Stylistic ==========
+    
+    def analyze_rhythm_variance(self, text: str) -> float:
+        """
+        Measure pacing via sentence length variation.
+        Returns variance score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        if len(sentences) < 2:
+            return 0.0
+        
+        lengths = [len(word_tokenize(sent)) for sent in sentences]
+        
+        variance = np.std(lengths) if lengths else 0
+        
+        return self._normalize_score(variance, 0, 10)
+    
+    def analyze_lexical_diversity(self, text: str) -> float:
+        """
+        Calculate type-token ratio.
+        Returns diversity score [0, 1].
+        """
+        words = [word.lower() for word in word_tokenize(text) if word.isalnum()]
+        
+        if not words:
+            return 0.0
+        
+        unique_words = set(words)
+        
+        return len(unique_words) / len(words)
+    
+    def analyze_imagery_density(self, text: str) -> float:
+        """
+        Measure descriptive richness via adjective/noun ratio.
+        Returns density score [0, 1].
+        """
+        if not self._load_spacy_model():
+            # Fallback: simple heuristic
+            words = word_tokenize(text)
+            adj_markers = [w for w in words if w.endswith('ly') or w.endswith('ful') or w.endswith('ous')]
+            return self._normalize_score(len(adj_markers) / max(len(words), 1), 0, 0.3)
+        
+        doc = self.nlp(text)
+        
+        adjectives = sum(1 for token in doc if token.pos_ == 'ADJ')
+        nouns = sum(1 for token in doc if token.pos_ == 'NOUN')
+        
+        if nouns == 0:
+            return 0.0
+        
+        density = adjectives / nouns
+        
+        return self._normalize_score(density, 0, 1)
+    
+    def analyze_symmetry_index(self, text: str) -> float:
+        """
+        Detect structural balance using sentence pattern similarity.
+        Returns symmetry score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        if len(sentences) < 2:
+            return 0.0
+        
+        # Compare sentence structures (length patterns)
+        lengths = [len(word_tokenize(sent)) for sent in sentences]
+        
+        # Check for patterns (e.g., similar lengths)
+        length_variance = np.std(lengths)
+        
+        # Lower variance = more symmetry
+        symmetry = 1.0 - self._normalize_score(length_variance, 0, 10)
+        
+        return symmetry
+    
+    def analyze_surprise_novelty(self, text: str) -> float:
+        """
+        Measure information gain using word frequency surprise.
+        Returns novelty score [0, 1].
+        """
+        words = [word.lower() for word in word_tokenize(text) if word.isalnum()]
+        
+        if not words:
+            return 0.0
+        
+        word_freq = Counter(words)
+        total_words = len(words)
+        
+        # Calculate entropy (higher entropy = more novelty)
+        entropy = 0
+        for count in word_freq.values():
+            p = count / total_words
+            entropy -= p * np.log2(p)
+        
+        # Normalize by max possible entropy
+        max_entropy = np.log2(total_words)
+        
+        return entropy / max_entropy if max_entropy > 0 else 0.5
+    
+    # ========== V - Veracity / Factual Dimension ==========
+    
+    def analyze_factual_density(self, text: str) -> float:
+        """
+        Count factual claims per sentence.
+        Returns density score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        fact_markers = ['is', 'are', 'was', 'were', 'has', 'have', 'shows', 'indicates', 'proves']
+        
+        factual_sentences = sum(1 for sent in sentences if any(marker in sent.lower().split() for marker in fact_markers))
+        
+        density = factual_sentences / max(len(sentences), 1)
+        
+        return density
+    
+    def analyze_fact_precision(self, text: str) -> float:
+        """
+        Measure specificity of claims using numbers and proper nouns.
+        Returns precision score [0, 1].
+        """
+        # Count numbers (specific data points)
+        numbers = len(re.findall(r'\b\d+\.?\d*\b', text))
+        
+        # Count proper nouns if spacy available
+        proper_nouns = 0
+        if self._load_spacy_model():
+            doc = self.nlp(text)
+            proper_nouns = sum(1 for token in doc if token.pos_ == 'PROPN')
+        
+        words = len(word_tokenize(text))
+        
+        precision = (numbers + proper_nouns) / max(words / 50, 1)
+        
+        return self._normalize_score(precision, 0, 5)
+    
+    def analyze_evidence_linkage(self, text: str) -> float:
+        """
+        Detect citations and references.
+        Returns linkage score [0, 1].
+        """
+        citation_patterns = [
+            r'\([A-Z][a-z]+,?\s+\d{4}\)',  # (Author, 2020)
+            r'\[\d+\]',  # [1]
+            r'according to',
+            r'cited in',
+            r'referenced by'
+        ]
+        
+        citations = sum(len(re.findall(pattern, text)) for pattern in citation_patterns)
+        
+        sentences = sent_tokenize(text)
+        
+        linkage = citations / max(len(sentences), 1)
+        
+        return self._normalize_score(linkage, 0, 0.5)
+    
+    def analyze_truth_confidence(self, text: str) -> float:
+        """
+        Estimate factual verification potential.
+        Returns confidence score [0, 1].
+        """
+        # High confidence markers
+        confidence_markers = ['proven', 'demonstrated', 'verified', 'confirmed', 'established']
+        
+        # Low confidence markers
+        uncertainty_markers = ['allegedly', 'supposedly', 'rumored', 'unconfirmed', 'disputed']
+        
+        text_lower = text.lower()
+        
+        confident = sum(text_lower.count(marker) for marker in confidence_markers)
+        uncertain = sum(text_lower.count(marker) for marker in uncertainty_markers)
+        
+        if confident + uncertain == 0:
+            return 0.5
+        
+        confidence = confident / (confident + uncertain)
+        
+        return confidence
+    
+    def analyze_source_diversity(self, text: str) -> float:
+        """
+        Count unique source references.
+        Returns diversity score [0, 1].
+        """
+        source_markers = ['according to', 'states', 'claims', 'reports', 'says']
+        
+        sentences = sent_tokenize(text)
+        
+        sourced_sentences = sum(1 for sent in sentences if any(marker in sent.lower() for marker in source_markers))
+        
+        diversity = sourced_sentences / max(len(sentences), 1)
+        
+        return diversity
+    
+    # ========== U - Uncertainty / Ambiguity ==========
+    
+    def analyze_ambiguity_entropy(self, text: str) -> float:
+        """
+        Measure word sense entropy (polysemy density).
+        Returns entropy score [0, 1].
+        """
+        # Words with high ambiguity
+        ambiguous_words = ['run', 'set', 'go', 'take', 'get', 'make', 'put', 'give']
+        
+        words = word_tokenize(text.lower())
+        ambiguous_count = sum(1 for word in words if word in ambiguous_words)
+        
+        ambiguity = ambiguous_count / max(len(words), 1)
+        
+        return self._normalize_score(ambiguity, 0, 0.1)
+    
+    def analyze_vagueness(self, text: str) -> float:
+        """
+        Detect fuzzy quantifiers.
+        Returns vagueness score [0, 1].
+        """
+        vague_quantifiers = ['some', 'many', 'few', 'several', 'often', 'sometimes', 'maybe', 'approximately']
+        
+        text_lower = text.lower()
+        words = word_tokenize(text_lower)
+        
+        vague_count = sum(1 for word in words if word in vague_quantifiers)
+        
+        vagueness = vague_count / max(len(words), 1)
+        
+        return self._normalize_score(vagueness, 0, 0.1)
+    
+    def analyze_cognitive_dissonance(self, text: str) -> float:
+        """
+        Detect mismatch between sentiment and logical content.
+        Returns dissonance score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        dissonance_cases = 0
+        
+        for sentence in sentences:
+            blob = TextBlob(sentence)
+            sentiment = blob.sentiment.polarity
+            
+            # Negative logical markers
+            negative_logic = ['however', 'but', 'although', 'despite', 'unfortunately']
+            has_negative_logic = any(marker in sentence.lower() for marker in negative_logic)
+            
+            # Dissonance: positive sentiment with negative logic or vice versa
+            if (sentiment > 0.3 and has_negative_logic) or (sentiment < -0.3 and not has_negative_logic):
+                dissonance_cases += 1
+        
+        dissonance = dissonance_cases / max(len(sentences), 1)
+        
+        return self._normalize_score(dissonance, 0, 0.3)
+    
+    def analyze_hypothetical_load(self, text: str) -> float:
+        """
+        Measure counterfactual and conditional statements.
+        Returns load score [0, 1].
+        """
+        hypothetical_markers = ['if', 'were', 'could', 'would', 'might', 'suppose', 'imagine', 'what if']
+        
+        text_lower = text.lower()
+        
+        hypothetical_count = sum(text_lower.count(marker) for marker in hypothetical_markers)
+        
+        sentences = sent_tokenize(text)
+        
+        load = hypothetical_count / max(len(sentences), 1)
+        
+        return self._normalize_score(load, 0, 1)
+    
+    def analyze_certainty_oscillation(self, text: str) -> float:
+        """
+        Measure variance of certainty over time.
+        Returns oscillation score [0, 1].
+        """
+        sentences = sent_tokenize(text)
+        
+        certain_markers = ['definitely', 'certainly', 'absolutely', 'clearly', 'obviously']
+        uncertain_markers = ['maybe', 'perhaps', 'possibly', 'might', 'could']
+        
+        certainty_scores = []
+        
+        for sentence in sentences:
+            sent_lower = sentence.lower()
+            certain = sum(sent_lower.count(marker) for marker in certain_markers)
+            uncertain = sum(sent_lower.count(marker) for marker in uncertain_markers)
+            
+            if certain + uncertain > 0:
+                score = certain / (certain + uncertain)
+            else:
+                score = 0.5
+            
+            certainty_scores.append(score)
+        
+        if len(certainty_scores) < 2:
+            return 0.0
+        
+        oscillation = np.std(certainty_scores)
+        
+        return self._normalize_score(oscillation, 0, 0.5)
+    
+    # ========== Named Entity Recognition & Relationship Extraction ==========
+    
+    def extract_named_entities_advanced(self, text: str) -> Dict[str, Any]:
+        """
+        Extract named entities with counts and types.
+        Returns structured entity data.
+        """
+        if not self._load_spacy_model():
+            return {'entities': {}, 'entity_count': 0}
+        
+        doc = self.nlp(text)
+        
+        entities_by_type = defaultdict(list)
+        
+        for ent in doc.ents:
+            entities_by_type[ent.label_].append(ent.text)
+        
+        entity_counts = {label: len(ents) for label, ents in entities_by_type.items()}
+        
+        return {
+            'entities_by_type': dict(entities_by_type),
+            'entity_counts': entity_counts,
+            'total_entities': sum(entity_counts.values()),
+            'entity_density': sum(entity_counts.values()) / max(len(word_tokenize(text)), 1)
+        }
+    
+    def extract_relationships(self, text: str) -> Dict[str, Any]:
+        """
+        Extract subject-verb-object relationships.
+        Returns relationship data.
+        """
+        if not self._load_spacy_model():
+            return {'relationships': [], 'relationship_count': 0}
+        
+        doc = self.nlp(text)
+        relationships = []
+        
+        for sent in doc.sents:
+            for token in sent:
+                if token.pos_ == 'VERB':
+                    subject = None
+                    obj = None
+                    
+                    for child in token.children:
+                        if child.dep_ in ['nsubj', 'nsubjpass']:
+                            subject = child.text
+                        elif child.dep_ in ['dobj', 'pobj']:
+                            obj = child.text
+                    
+                    if subject and obj:
+                        relationships.append({
+                            'subject': subject,
+                            'verb': token.text,
+                            'object': obj
+                        })
+        
+        return {
+            'relationships': relationships,
             'relationship_count': len(relationships),
-            'relationships': relationships[:25],
+            'relationship_density': len(relationships) / max(len(list(doc.sents)), 1)
         }
-
-    def extract_word_sense_disambiguation(self, text: Optional[str] = None) -> Dict[str, Any]:
-        tokens = self._get_tokens(text)
-        ambiguous = [token for token in tokens if token in AMBIGUOUS_WORDS]
-        specificity = self._round(1.0 - self._safe_ratio(len(ambiguous), len(tokens)))
+    
+    def extract_word_sense_disambiguation(self, text: str) -> Dict[str, float]:
+        """
+        Analyze word sense ambiguity using context.
+        Returns disambiguation metrics.
+        """
+        if not self._load_spacy_model():
+            return {'avg_word_specificity': 0.5}
+        
+        doc = self.nlp(text)
+        
+        # Use POS tags and dependency parsing as proxy for word sense
+        word_specificities = []
+        
+        for token in doc:
+            if token.is_alpha and not token.is_stop:
+                # More specific POS tags and dependencies indicate clearer sense
+                specificity = 0.5
+                
+                if token.pos_ in ['PROPN', 'NUM']:
+                    specificity = 1.0
+                elif token.pos_ in ['NOUN', 'VERB']:
+                    specificity = 0.7
+                else:
+                    specificity = 0.5
+                
+                word_specificities.append(specificity)
+        
         return {
-            'ambiguous_terms': len(ambiguous),
-            'unique_ambiguous_terms': len(set(ambiguous)),
-            'avg_word_specificity': specificity,
+            'avg_word_specificity': float(np.mean(word_specificities)) if word_specificities else 0.5,
+            'total_words_analyzed': len(word_specificities)
         }
-
-    def extract_information_extraction(self, text: Optional[str] = None) -> Dict[str, Any]:
-        segment = text or self.text
-        emails = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", segment)
-        urls = re.findall(r"https?://[^\s]+", segment)
-        dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", segment)
-        numbers = re.findall(r"\b\d+(?:\.\d+)?\b", segment)
+    
+    def extract_information_extraction(self, text: str) -> Dict[str, Any]:
+        """
+        Extract structured information: dates, numbers, entities, facts.
+        Returns extracted information.
+        """
+        # Extract dates
+        dates = re.findall(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b\d{4}\b', text)
+        
+        # Extract numbers
+        numbers = re.findall(r'\b\d+\.?\d*\b', text)
+        
+        # Extract emails
+        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
+        
+        # Extract URLs - simplified pattern for security
+        urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text)
+        
+        entities = {}
+        if self._load_spacy_model():
+            doc = self.nlp(text)
+            entities = {ent.label_: [e.text for e in doc.ents if e.label_ == ent.label_] 
+                       for ent in doc.ents}
+        
         return {
-            'email_count': len(emails),
-            'url_count': len(urls),
+            'dates': dates,
             'date_count': len(dates),
+            'numbers': numbers,
             'number_count': len(numbers),
+            'emails': emails,
+            'email_count': len(emails),
+            'urls': urls,
+            'url_count': len(urls),
+            'entities': entities
         }
-
-    def get_counts(self) -> Dict[str, Any]:
-        return self.counts
-
-# Backwards-compatible wrapper expected by repo
-class ContentParserAnalyzer:
-    def __init__(self, text: str, config: Optional[AnalyzerConfig] = None):
-        self.text = text
-        self.advanced_nlp_analyzer = AdvancedNLPAnalyzer(text, config=config)
+    
+    # ========== Temporal Analysis ==========
+    
+    def analyze_temporal_windows(self) -> Dict[str, Any]:
+        """
+        Perform multi-scale temporal window analysis.
+        Returns complete temporal analysis with all parameters across window sizes.
+        """
+        text = self.text
+        tokens = self._tokenize_by_words(text)
+        
+        # Full text analysis
+        full_analysis = self._analyze_single_window(text, "full")
+        
+        # Window-based analysis
+        window_analyses = {}
+        
+        for window_size in self.window_sizes:
+            if len(tokens) < window_size:
+                # Text is shorter than window, analyze as single window
+                window_analyses[f"window_{window_size}"] = [full_analysis]
+            else:
+                windows = self._create_windows(tokens, window_size)
+                window_results = []
+                
+                for i, window_tokens in enumerate(windows):
+                    window_text = ' '.join(window_tokens)
+                    window_result = self._analyze_single_window(window_text, f"window_{i}")
+                    window_results.append(window_result)
+                
+                window_analyses[f"window_{window_size}"] = window_results
+        
+        # Calculate temporal trends
+        temporal_trends = self._calculate_temporal_trends(window_analyses)
+        
+        return {
+            'full_text_analysis': full_analysis,
+            'window_analyses': window_analyses,
+            'temporal_trends': temporal_trends,
+            'metadata': {
+                'total_tokens': len(tokens),
+                'window_sizes': self.window_sizes,
+                'total_windows': {f"window_{ws}": len(window_analyses.get(f"window_{ws}", [])) 
+                                for ws in self.window_sizes}
+            }
+        }
+    
+    def _analyze_single_window(self, text: str, window_id: str) -> Dict[str, Any]:
+        """
+        Analyze a single text window with all orthogonal parameters.
+        """
+        return {
+            'window_id': window_id,
+            # R - Reasoning
+            'logical_coherence': self.analyze_logical_coherence(text),
+            'causal_density': self.analyze_causal_density(text),
+            'argumentation_entropy': self.analyze_argumentation_entropy(text),
+            'contradiction_ratio': self.analyze_contradiction_ratio(text),
+            'inferential_depth': self.analyze_inferential_depth(text),
+            
+            # C - Constraints
+            'domain_consistency': self.analyze_domain_consistency(text),
+            'referential_stability': self.analyze_referential_stability(text),
+            'temporal_consistency': self.analyze_temporal_consistency(text),
+            'modality_balance': self.analyze_modality_balance(text),
+            'precision_index': self.analyze_precision_index(text),
+            
+            # G - Goals
+            'goal_clarity': self.analyze_goal_clarity(text),
+            'focus_retention': self.analyze_focus_retention(text),
+            'persuasiveness': self.analyze_persuasiveness(text),
+            'commitment': self.analyze_commitment(text),
+            'teleology': self.analyze_teleology(text),
+            
+            # E - Emotion
+            'emotional_valence': self.analyze_emotional_valence(text),
+            'arousal': self.analyze_arousal(text),
+            'empathy_score': self.analyze_empathy_score(text),
+            'emotional_volatility': self.analyze_emotional_volatility(text),
+            'symbolic_resonance': self.analyze_symbolic_resonance(text),
+            
+            # P - Pragmatic
+            'speech_act_ratio': self.analyze_speech_act_ratio(text),
+            'dialogue_coherence': self.analyze_dialogue_coherence(text),
+            'pragmatic_truth': self.analyze_pragmatic_truth(text),
+            'social_tone': self.analyze_social_tone(text),
+            'engagement_index': self.analyze_engagement_index(text),
+            
+            # A - Aesthetic
+            'rhythm_variance': self.analyze_rhythm_variance(text),
+            'lexical_diversity': self.analyze_lexical_diversity(text),
+            'imagery_density': self.analyze_imagery_density(text),
+            'symmetry_index': self.analyze_symmetry_index(text),
+            'surprise_novelty': self.analyze_surprise_novelty(text),
+            
+            # V - Veracity
+            'factual_density': self.analyze_factual_density(text),
+            'fact_precision': self.analyze_fact_precision(text),
+            'evidence_linkage': self.analyze_evidence_linkage(text),
+            'truth_confidence': self.analyze_truth_confidence(text),
+            'source_diversity': self.analyze_source_diversity(text),
+            
+            # U - Uncertainty
+            'ambiguity_entropy': self.analyze_ambiguity_entropy(text),
+            'vagueness': self.analyze_vagueness(text),
+            'cognitive_dissonance': self.analyze_cognitive_dissonance(text),
+            'hypothetical_load': self.analyze_hypothetical_load(text),
+            'certainty_oscillation': self.analyze_certainty_oscillation(text),
+            
+            # Advanced NLP
+            'named_entities': self.extract_named_entities_advanced(text),
+            'relationships': self.extract_relationships(text),
+            'word_sense_disambiguation': self.extract_word_sense_disambiguation(text),
+            'information_extraction': self.extract_information_extraction(text)
+        }
+    
+    def _calculate_temporal_trends(self, window_analyses: Dict) -> Dict[str, Any]:
+        """
+        Calculate trends and patterns across temporal windows.
+        """
+        trends = {}
+        
+        for window_size_key, windows in window_analyses.items():
+            if not windows or len(windows) < 2:
+                continue
+            
+            # Extract time series for each parameter
+            param_series = defaultdict(list)
+            
+            for window in windows:
+                for param, value in window.items():
+                    if isinstance(value, (int, float)):
+                        param_series[param].append(value)
+            
+            # Calculate trends
+            window_trends = {}
+            for param, series in param_series.items():
+                if len(series) >= 2:
+                    # Calculate basic statistics
+                    window_trends[param] = {
+                        'mean': float(np.mean(series)),
+                        'std': float(np.std(series)),
+                        'min': float(np.min(series)),
+                        'max': float(np.max(series)),
+                        'trend': 'increasing' if series[-1] > series[0] else 'decreasing',
+                        'volatility': float(np.std(np.diff(series))) if len(series) > 1 else 0.0
+                    }
+            
+            trends[window_size_key] = window_trends
+        
+        return trends
+    
+    def run_complete_analysis(self) -> Dict[str, Any]:
+        """
+        Run complete temporal orthogonal analysis on the text.
+        Returns comprehensive analysis results.
+        """
+        temporal_results = self.analyze_temporal_windows()
+        
+        # Store in counts for compatibility
+        self.counts['advanced_nlp_analysis'] = temporal_results
+        
+        return temporal_results
