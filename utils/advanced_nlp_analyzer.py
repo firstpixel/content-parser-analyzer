@@ -1015,8 +1015,8 @@ class AdvancedNLPAnalyzer(BaseParser):
         # Extract emails
         emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
         
-        # Extract URLs
-        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', text)
+        # Extract URLs - simplified pattern for security
+        urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text)
         
         entities = {}
         if self._load_spacy_model():
