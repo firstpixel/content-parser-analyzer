@@ -13,6 +13,7 @@ from utils.text_processor import TextProcessor
 from utils.nlp_analyzer import NLPAnalyzer
 from utils.logical_analyzer import LogicalAnalyzer
 from utils.metadata_extractor import MetadataExtractor
+from utils.advanced_nlp_analyzer import AdvancedNLPAnalyzer
 
 class ContentParserAnalyzer:
     """A powerful AI-driven content parser that combines multiple specialized parsers,
@@ -34,6 +35,7 @@ class ContentParserAnalyzer:
         self.nlp_analyzer = NLPAnalyzer(text)
         self.logical_analyzer = LogicalAnalyzer(text)
         self.metadata_extractor = MetadataExtractor(text)
+        self.advanced_nlp_analyzer = AdvancedNLPAnalyzer(text)
         self._sync_parsers()
 
     def _sync_parsers(self):
@@ -43,7 +45,8 @@ class ContentParserAnalyzer:
             self.text_processor,
             self.nlp_analyzer,
             self.logical_analyzer,
-            self.metadata_extractor
+            self.metadata_extractor,
+            self.advanced_nlp_analyzer
         ]
         for parser in parsers:
             parser.text = self.text
@@ -98,7 +101,7 @@ class ContentParserAnalyzer:
         Aggregate counts from all sub-parsers.
         """
         counts = {}
-        for parser in [self.code_parser, self.text_processor, self.nlp_analyzer, self.logical_analyzer, self.metadata_extractor]:
+        for parser in [self.code_parser, self.text_processor, self.nlp_analyzer, self.logical_analyzer, self.metadata_extractor, self.advanced_nlp_analyzer]:
             counts.update(parser.get_counts())
         return counts
 
@@ -129,7 +132,7 @@ class ContentParserAnalyzer:
         After the method call, update the overall state (text, remaining_text, extracted_text)
         and synchronize the sub-parsers.
         """
-        for parser in [self.code_parser, self.text_processor, self.nlp_analyzer, self.logical_analyzer, self.metadata_extractor]:
+        for parser in [self.code_parser, self.text_processor, self.nlp_analyzer, self.logical_analyzer, self.metadata_extractor, self.advanced_nlp_analyzer]:
             if hasattr(parser, name):
                 method = getattr(parser, name)
                 def wrapper(*args, **kwargs):

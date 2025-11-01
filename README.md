@@ -32,7 +32,23 @@ The ContentParserAnalyzer is a powerful yet simple-to-use utility designed to an
 - Credibility scoring
 - Hallucination detection
 
-### 4. Logical Analysis
+### 4. Advanced NLP Analysis (NEW!) 🆕
+**Temporal Orthogonal Functions for Text-to-Numerical Data Transformation**
+- **Multi-scale temporal windowing** (100, 200, 300, 600 tokens + full text analysis)
+- **RCGE-PAVU Framework** - 40+ orthogonal parameters organized in 8 families:
+  - **R - Reasoning/Logic**: Coherence, causality, argumentation, contradictions, inferential depth
+  - **C - Constraints/Context**: Domain consistency, referential stability, temporal consistency, modality, precision
+  - **G - Goals/Intent**: Clarity, focus retention, persuasiveness, commitment, teleology
+  - **E - Emotion/Expression**: Valence, arousal, empathy, volatility, symbolic resonance
+  - **P - Pragmatic/Context**: Speech acts, dialogue coherence, pragmatic truth, social tone, engagement
+  - **A - Aesthetic/Style**: Rhythm variance, lexical diversity, imagery density, symmetry, novelty
+  - **V - Veracity/Facts**: Factual density, precision, evidence linkage, truth confidence, source diversity
+  - **U - Uncertainty/Ambiguity**: Ambiguity entropy, vagueness, cognitive dissonance, hypothetical load, certainty oscillation
+- **Advanced Features**: Named Entity Recognition (NER), Relationship Extraction, Word-Sense Disambiguation, Information Extraction
+- **Temporal Trends Analysis**: Track how parameters evolve across text windows
+- **Complete JSON Export**: All data numerical and serializable for validation
+
+### 5. Logical Analysis
 - Logical flow analysis
 - Contradiction detection
 - Fallacy detection
@@ -44,7 +60,7 @@ The ContentParserAnalyzer is a powerful yet simple-to-use utility designed to an
 - Irrelevant content detection
 - Misinterpretation analysis
 
-### 5. Metadata Extraction
+### 6. Metadata Extraction
 - URLs
 - Emails
 - Dates
@@ -253,6 +269,125 @@ The ContentParserAnalyzer is a powerful yet simple-to-use utility designed to an
 ***assign_credibility_score()*** – Assigns a credibility score based on bias and factual claims.
 
 ***detect_hallucinations()*** – Detects inconsistencies and unsupported claims in the text.
+
+
+### Methods in AdvancedNLPAnalyzer (NEW!)
+
+---
+
+The **AdvancedNLPAnalyzer** provides comprehensive text-to-numerical-data transformation using temporal orthogonal functions. It implements the **RCGE-PAVU** framework with multi-scale windowed analysis (100, 200, 300, 600 tokens + full text).
+
+#### Main Method
+
+***run_complete_analysis()*** – Executes complete temporal orthogonal analysis returning all RCGE-PAVU parameters across multiple window sizes with temporal trends.
+
+***analyze_temporal_windows()*** – Performs multi-scale temporal window analysis with sliding windows for detailed temporal evolution tracking.
+
+#### R - Reasoning/Logic Structure (5 parameters)
+
+***analyze_logical_coherence()*** – Measures internal consistency using sentence-to-sentence similarity [0, 1].
+
+***analyze_causal_density()*** – Counts cause-effect relationships normalized by text length [0, 1].
+
+***analyze_argumentation_entropy()*** – Measures balance of claims vs evidence using Toulmin model [0, 1].
+
+***analyze_contradiction_ratio()*** – Detects internal contradictions via sentiment analysis [0, 1].
+
+***analyze_inferential_depth()*** – Measures reasoning depth using subordinate clauses [0, 1].
+
+#### C - Constraints/Context Integrity (5 parameters)
+
+***analyze_domain_consistency()*** – Measures vocabulary consistency within topic bounds [0, 1].
+
+***analyze_referential_stability()*** – Tracks entity persistence using NER [0, 1].
+
+***analyze_temporal_consistency()*** – Analyzes verb tense coherence [0, 1].
+
+***analyze_modality_balance()*** – Measures balance between fact and possibility statements [0, 1].
+
+***analyze_precision_index()*** – Measures specificity vs ambiguity using lexical density [0, 1].
+
+#### G - Goals/Intent & Direction (5 parameters)
+
+***analyze_goal_clarity()*** – Measures clarity of stated intent [0, 1].
+
+***analyze_focus_retention()*** – Measures topic drift using moving window similarity [0, 1].
+
+***analyze_persuasiveness()*** – Measures rhetorical strength using appeal indicators [0, 1].
+
+***analyze_commitment()*** – Measures modal certainty (opposite of hedging) [0, 1].
+
+***analyze_teleology()*** – Measures purpose-driven phrasing [0, 1].
+
+#### E - Emotion/Expressive Content (5 parameters)
+
+***analyze_emotional_valence()*** – Measures positive/negative emotion [-1, 1] → [0, 1].
+
+***analyze_arousal()*** – Measures emotional intensity via exclamations and amplifiers [0, 1].
+
+***analyze_empathy_score()*** – Measures perspective-taking tone [0, 1].
+
+***analyze_emotional_volatility()*** – Measures sentiment change rate across windows [0, 1].
+
+***analyze_symbolic_resonance()*** – Measures metaphor density [0, 1].
+
+#### P - Pragmatic/Contextual Use (5 parameters)
+
+***analyze_speech_act_ratio()*** – Classifies sentences by speech act type (assertive, directive, expressive).
+
+***analyze_dialogue_coherence()*** – Measures question-answer quality [0, 1].
+
+***analyze_pragmatic_truth()*** – Measures informativeness vs filler content [0, 1].
+
+***analyze_social_tone()*** – Analyzes politeness, dominance, cooperation scores.
+
+***analyze_engagement_index()*** – Measures direct audience addressing [0, 1].
+
+#### A - Aesthetic/Stylistic (5 parameters)
+
+***analyze_rhythm_variance()*** – Measures pacing via sentence length variation [0, 1].
+
+***analyze_lexical_diversity()*** – Calculates type-token ratio [0, 1].
+
+***analyze_imagery_density()*** – Measures descriptive richness via adjective/noun ratio [0, 1].
+
+***analyze_symmetry_index()*** – Detects structural balance [0, 1].
+
+***analyze_surprise_novelty()*** – Measures information gain using word frequency [0, 1].
+
+#### V - Veracity/Factual Dimension (5 parameters)
+
+***analyze_factual_density()*** – Counts factual claims per sentence [0, 1].
+
+***analyze_fact_precision()*** – Measures specificity using numbers and proper nouns [0, 1].
+
+***analyze_evidence_linkage()*** – Detects citations and references [0, 1].
+
+***analyze_truth_confidence()*** – Estimates factual verification potential [0, 1].
+
+***analyze_source_diversity()*** – Counts unique source references [0, 1].
+
+#### U - Uncertainty/Ambiguity (5 parameters)
+
+***analyze_ambiguity_entropy()*** – Measures word sense entropy (polysemy density) [0, 1].
+
+***analyze_vagueness()*** – Detects fuzzy quantifiers [0, 1].
+
+***analyze_cognitive_dissonance()*** – Detects mismatch between sentiment and logic [0, 1].
+
+***analyze_hypothetical_load()*** – Measures counterfactual statements [0, 1].
+
+***analyze_certainty_oscillation()*** – Measures variance of certainty over time [0, 1].
+
+#### Advanced NLP Features
+
+***extract_named_entities_advanced()*** – Extracts named entities with counts, types, and density metrics.
+
+***extract_relationships()*** – Extracts subject-verb-object relationships from text.
+
+***extract_word_sense_disambiguation()*** – Analyzes word sense ambiguity using context.
+
+***extract_information_extraction()*** – Extracts structured information: dates, numbers, entities, facts.
 
 
 ## Installation
@@ -490,6 +625,90 @@ result = (parser
 
 print("Final Output:", result)
 print("Analysis Results:", parser.get_counts())
+```
+
+### Advanced NLP Analysis with Temporal Orthogonal Functions (NEW!)
+
+```python
+from utils.content_parser_analyzer import ContentParserAnalyzer
+import json
+
+# Text for comprehensive analysis
+text = """
+Climate change represents one of the most pressing challenges of our time.
+Scientific consensus overwhelmingly confirms that human activities are the primary driver.
+Rising global temperatures threaten ecosystems, economies, and human societies worldwide.
+
+We must transition rapidly to renewable energy sources like solar and wind power.
+Individual actions matter, but systemic change requires coordinated policy efforts.
+International cooperation is essential to achieve meaningful emissions reductions.
+"""
+
+# Initialize parser
+parser = ContentParserAnalyzer(text)
+
+# Run complete temporal orthogonal analysis
+results = parser.advanced_nlp_analyzer.run_complete_analysis()
+
+# Access full text analysis (all RCGE-PAVU parameters)
+full_analysis = results['full_text_analysis']
+
+print("📊 RCGE-PAVU Analysis:")
+print(f"  🧠 Logical Coherence:    {full_analysis['logical_coherence']:.3f}")
+print(f"  💭 Emotional Valence:    {full_analysis['emotional_valence']:.3f}")
+print(f"  🎯 Persuasiveness:       {full_analysis['persuasiveness']:.3f}")
+print(f"  ✅ Factual Density:      {full_analysis['factual_density']:.3f}")
+print(f"  🎨 Lexical Diversity:    {full_analysis['lexical_diversity']:.3f}")
+print(f"  ❓ Vagueness:            {full_analysis['vagueness']:.3f}")
+
+# Access temporal window analysis
+print(f"\n⏱️  Temporal Windows:")
+for window_key, windows in results['window_analyses'].items():
+    print(f"  {window_key}: {len(windows)} windows analyzed")
+
+# Access temporal trends (how parameters change over time)
+if results['temporal_trends']:
+    print(f"\n📈 Temporal Trends Available:")
+    for window_key in results['temporal_trends']:
+        print(f"  {window_key}: tracking parameter evolution")
+
+# Export to JSON for validation/comparison
+json_output = json.dumps(results, indent=2, default=str)
+print(f"\n💾 Results serialized to JSON ({len(json_output)} chars)")
+
+# Access specific parameter families
+print(f"\n🔬 All 44+ Orthogonal Parameters Available:")
+print(f"  R - Reasoning:     5 parameters (coherence, causality, depth, etc.)")
+print(f"  C - Constraints:   5 parameters (consistency, stability, precision, etc.)")
+print(f"  G - Goals:         5 parameters (clarity, focus, persuasion, etc.)")
+print(f"  E - Emotion:       5 parameters (valence, arousal, empathy, etc.)")
+print(f"  P - Pragmatic:     5 parameters (speech acts, truth, tone, etc.)")
+print(f"  A - Aesthetic:     5 parameters (rhythm, diversity, novelty, etc.)")
+print(f"  V - Veracity:      5 parameters (facts, evidence, confidence, etc.)")
+print(f"  U - Uncertainty:   5 parameters (ambiguity, vagueness, dissonance, etc.)")
+print(f"  + Advanced NLP:    4 features (NER, relationships, WSD, extraction)")
+```
+
+### Individual Parameter Analysis
+
+```python
+# Access individual parameters directly
+analyzer = parser.advanced_nlp_analyzer
+
+# Reasoning parameters
+coherence = analyzer.analyze_logical_coherence(text)
+causal = analyzer.analyze_causal_density(text)
+
+# Emotion parameters
+valence = analyzer.analyze_emotional_valence(text)
+arousal = analyzer.analyze_arousal(text)
+
+# Advanced NLP features
+entities = analyzer.extract_named_entities_advanced(text)
+relationships = analyzer.extract_relationships(text)
+
+print(f"Named Entities: {entities['total_entities']}")
+print(f"Relationships: {relationships['relationship_count']}")
 ```
 
 ## State Management
